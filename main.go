@@ -4,104 +4,90 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"net"
+	"net/http"
 	"regexp"
-	"strings"
-	"mysql-driver"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
-// Configuration for the proxy
-const (
-	listenAddr  = "127.0.0.1:3307"     // Address for the proxy
-	mysqlDSN    = "user:password@tcp(127.0.0.1:3306)/dbname" // Update with your MySQL credentials
-)
+var db *sql.DB
 
-// SQL injection detection regex
-var sqlInjectionPatterns = regexp.MustCompile(`(?i)(--|;|/\*|\*/|drop\s|insert\s|delete\s|update\s|union\s|sleep\()|['"]\s*or\s+['"]`)
-
-func main() {
-	// Start listening for client connections
-	listener, err := net.Listen("tcp", listenAddr)
+// Basic function to open a connection to the MySQL database
+func initDB() {
+	var err error
+	dsn := "user:password@tcp(mysql-db-service:3306)/dbname" // MySQL connection string (adjust as needed)
+	db, err = sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatalf("Failed to start proxy: %v", err)
-	}
-	defer listener.Close()
-	log.Printf("Proxy is running on %s\n", listenAddr)
-
-	for {
-		clientConn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Failed to accept client connection: %v\n", err)
-			continue
-		}
-		go handleClient(clientConn)
+		log.Fatalf("Failed to connect to the database: %v\n", err)
 	}
 }
 
-func handleClient(clientConn net.Conn) {
-	defer clientConn.Close()
+// SQL injection detection using regular expressions
+func isSQLInjection(query string) bool {
+	// A very basic example of detecting malicious patterns, add more sophisticated patterns as needed
+	maliciousPatterns := []string{
+		"(?i)(union|select|drop|insert|update|delete|--|;|#)", // SQL keywords and comments
+		"(?i)benchmark", // used in timing attacks
+		"(?i)into outfile", // used in file-based attacks
+	}
 
-	// Connect to the MySQL database
-	db, err := sql.Open("mysql", mysqlDSN)
-	if err != nil {
-		log.Printf("Failed to connect to database: %v\n", err)
+	for _, pattern := range maliciousPatterns {
+		re := regexp.MustCompile(pattern)
+		if re.MatchString(query) {
+			return true
+		}
+	}
+	return false
+}
+
+// Proxy function to handle incoming requests
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract the SQL query from the request (assuming the query is passed as a POST body)
+	query := r.FormValue("query")
+	if query == "" {
+		http.Error(w, "Query is missing", http.StatusBadRequest)
 		return
 	}
-	defer db.Close()
 
-	buf := make([]byte, 4096)
-	for {
-		// Read query from the client
-		n, err := clientConn.Read(buf)
-		if err != nil {
-			log.Printf("Error reading from client: %v\n", err)
+	// Sanitize and check the query for SQL injection
+	if isSQLInjection(query) {
+		http.Error(w, "SQL Injection detected in query", http.StatusForbidden)
+		return
+	}
+
+	// Forward the sanitized query to MySQL
+	rows, err := db.Query(query)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// Sending back results as a simple response (just for demonstration)
+	var result string
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			http.Error(w, fmt.Sprintf("Error scanning result: %v", err), http.StatusInternalServerError)
 			return
 		}
-		query := strings.TrimSpace(string(buf[:n]))
-		log.Printf("Received query: %s\n", query)
+		result += data + "\n"
+	}
 
-		// Check for SQL injection patterns
-		if sqlInjectionPatterns.MatchString(query) {
-			log.Printf("Blocked query due to potential SQL injection: %s\n", query)
-			clientConn.Write([]byte("Error: Query blocked due to potential SQL injection.\n"))
-			continue
-		}
+	// Send the query result back to the client
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(result))
+}
 
-		// Forward query to the database
-		rows, err := db.Query(query)
-		if err != nil {
-			log.Printf("Query error: %v\n", err)
-			clientConn.Write([]byte(fmt.Sprintf("Error: %v\n", err)))
-			continue
-		}
+func main() {
+	// Initialize the database connection
+	initDB()
+	defer db.Close()
 
-		// Format and send results back to the client
-		cols, err := rows.Columns()
-		if err != nil {
-			log.Printf("Failed to get columns: %v\n", err)
-			rows.Close()
-			clientConn.Write([]byte(fmt.Sprintf("Error: %v\n", err)))
-			continue
-		}
-		results := []string{}
-		for rows.Next() {
-			columns := make([]interface{}, len(cols))
-			columnPointers := make([]interface{}, len(cols))
-			for i := range columns {
-				columnPointers[i] = &columns[i]
-			}
-			if err := rows.Scan(columnPointers...); err != nil {
-				log.Printf("Failed to scan row: %v\n", err)
-				continue
-			}
-			rowData := []string{}
-			for _, col := range columns {
-				rowData = append(rowData, fmt.Sprintf("%v", col))
-			}
-			results = append(results, strings.Join(rowData, "\t"))
-		}
-		rows.Close()
-
-		clientConn.Write([]byte(strings.Join(results, "\n") + "\n"))
+	// Start the proxy server
+	http.HandleFunc("/query", proxyHandler)
+	log.Println("Proxy server running on port 8080...")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
