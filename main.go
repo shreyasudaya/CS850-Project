@@ -7,7 +7,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
-
+	"mysql-driver"
 )
 
 // Configuration for the proxy
