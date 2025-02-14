@@ -14,6 +14,54 @@ import (
 
 func main() {
 	a := app.New()
+	w := a.NewWindow("MySQL Login")
+	w.Resize(fyne.NewSize(400, 300))
+
+	usernameEntry := widget.NewEntry()
+	usernameEntry.SetPlaceHolder("Username")
+	passwordEntry := widget.NewPasswordEntry()
+	passwordEntry.SetPlaceHolder("Password")
+	hostEntry := widget.NewEntry()
+	hostEntry.SetText("127.0.0.1:3306")
+	dbNameEntry := widget.NewEntry()
+	dbNameEntry.SetPlaceHolder("BankDB")
+
+	statusLabel := widget.NewLabel("")
+
+	loginButton := widget.NewButton("Login", func() {
+		username := usernameEntry.Text
+		password := passwordEntry.Text
+		host := hostEntry.Text
+		dbName := dbNameEntry.Text
+
+		dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s", username, password, host, dbName)
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			statusLabel.SetText("Connection failed: " + err.Error())
+			return
+		}
+		if err := db.Ping(); err != nil {
+			statusLabel.SetText("Ping failed: " + err.Error())
+			return
+		}
+		statusLabel.SetText("Connected successfully!")
+		w.Hide()
+		showQueryWindow(a, db)
+	})
+
+	w.SetContent(container.NewVBox(
+		usernameEntry,
+		passwordEntry,
+		hostEntry,
+		dbNameEntry,
+		loginButton,
+		statusLabel,
+	))
+
+	w.ShowAndRun()
+}
+
+func showQueryWindow(a fyne.App, db *sql.DB) {
 	w := a.NewWindow("SQL Query Runner")
 	w.Resize(fyne.NewSize(500, 400))
 
@@ -22,13 +70,6 @@ func main() {
 
 	resultOutput := widget.NewLabel("Results will appear here...")
 	runButton := widget.NewButton("Run Query", func() {
-		db, err := sql.Open("mysql", "user:password@tcp(127.0.0.1:3306)/bank_db")
-		if err != nil {
-			resultOutput.SetText("Database connection error: " + err.Error())
-			return
-		}
-		defer db.Close()
-
 		query := queryInput.Text
 		rows, err := db.Query(query)
 		if err != nil {
@@ -71,5 +112,5 @@ func main() {
 		resultOutput,
 	))
 
-	w.ShowAndRun()
+	w.Show()
 }
