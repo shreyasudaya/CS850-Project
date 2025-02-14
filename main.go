@@ -4,90 +4,72 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"net/http"
-	"regexp"
 
 	_ "github.com/go-sql-driver/mysql"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
 )
 
-var db *sql.DB
+func main() {
+	a := app.New()
+	w := a.NewWindow("SQL Query Runner")
+	w.Resize(fyne.NewSize(500, 400))
 
-// Basic function to open a connection to the MySQL database
-func initDB() {
-	var err error
-	dsn := "user:password@tcp(mysql-db-service:3306)/dbname" // MySQL connection string (adjust as needed)
-	db, err = sql.Open("mysql", dsn)
-	if err != nil {
-		log.Fatalf("Failed to connect to the database: %v\n", err)
-	}
-}
+	queryInput := widget.NewMultiLineEntry()
+	queryInput.SetPlaceHolder("Write your SQL query here...")
 
-// SQL injection detection using regular expressions
-func isSQLInjection(query string) bool {
-	// A very basic example of detecting malicious patterns, add more sophisticated patterns as needed
-	maliciousPatterns := []string{
-		"(?i)(union|select|drop|insert|update|delete|--|;|#)", // SQL keywords and comments
-		"(?i)benchmark", // used in timing attacks
-		"(?i)into outfile", // used in file-based attacks
-	}
-
-	for _, pattern := range maliciousPatterns {
-		re := regexp.MustCompile(pattern)
-		if re.MatchString(query) {
-			return true
-		}
-	}
-	return false
-}
-
-// Proxy function to handle incoming requests
-func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract the SQL query from the request (assuming the query is passed as a POST body)
-	query := r.FormValue("query")
-	if query == "" {
-		http.Error(w, "Query is missing", http.StatusBadRequest)
-		return
-	}
-
-	// Sanitize and check the query for SQL injection
-	if isSQLInjection(query) {
-		http.Error(w, "SQL Injection detected in query", http.StatusForbidden)
-		return
-	}
-
-	// Forward the sanitized query to MySQL
-	rows, err := db.Query(query)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Database error: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	// Sending back results as a simple response (just for demonstration)
-	var result string
-	for rows.Next() {
-		var data string
-		if err := rows.Scan(&data); err != nil {
-			http.Error(w, fmt.Sprintf("Error scanning result: %v", err), http.StatusInternalServerError)
+	resultOutput := widget.NewLabel("Results will appear here...")
+	runButton := widget.NewButton("Run Query", func() {
+		db, err := sql.Open("mysql", "user:password@tcp(127.0.0.1:3306)/bank_db")
+		if err != nil {
+			resultOutput.SetText("Database connection error: " + err.Error())
 			return
 		}
-		result += data + "\n"
-	}
+		defer db.Close()
 
-	// Send the query result back to the client
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(result))
-}
+		query := queryInput.Text
+		rows, err := db.Query(query)
+		if err != nil {
+			resultOutput.SetText("Query error: " + err.Error())
+			return
+		}
+		defer rows.Close()
 
-func main() {
-	// Initialize the database connection
-	initDB()
-	defer db.Close()
+		columns, err := rows.Columns()
+		if err != nil {
+			resultOutput.SetText("Error fetching columns: " + err.Error())
+			return
+		}
 
-	// Start the proxy server
-	http.HandleFunc("/query", proxyHandler)
-	log.Println("Proxy server running on port 8080...")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
+		var results string
+		values := make([]interface{}, len(columns))
+		scans := make([]interface{}, len(columns))
+		for i := range values {
+			scans[i] = &values[i]
+		}
+
+		for rows.Next() {
+			if err := rows.Scan(scans...); err != nil {
+				log.Fatal(err)
+			}
+			for i, v := range values {
+				results += fmt.Sprintf("%s: %v\n", columns[i], v)
+			}
+			results += "\n"
+		}
+		if results == "" {
+			results = "No results found."
+		}
+		resultOutput.SetText(results)
+	})
+
+	w.SetContent(container.NewVBox(
+		queryInput,
+		runButton,
+		resultOutput,
+	))
+
+	w.ShowAndRun()
 }
