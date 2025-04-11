@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import re
 import os
-from train_model import *
+from train_model import extract_sql_patterns
 
 app = Flask(__name__)
 
