@@ -1,0 +1,14 @@
+version: '3.12'
+
+services:
+  proxy:
+    build: ./proxy
+    ports:
+      - "8080:8080"
+    depends_on:
+      - detector
+
+  detector:
+    build: ./python-service
+    ports:
+      - "5000:5000"
