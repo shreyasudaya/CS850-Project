@@ -13,6 +13,7 @@ Have MySQL installed
 2. cd into repo and cd into proxy
 3. go run main.go
 4. on a parallel terminal cd into python-service
-5. activate venv and run pip install -r requirements.txt
-6. run python-service.py
+5. activate venv and run pip install -r requirements.txt .
+6. Download the .pkl file or run train_model.py 
+7. run python-service.py
 
